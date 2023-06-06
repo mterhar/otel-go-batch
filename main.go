@@ -1,16 +1,15 @@
-package batchscheduler
+package main
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -19,13 +18,13 @@ func main() {
 
 	// intialization code that starts up, does evaluations, connects to queue
 	log.Println("starting scheduler")
-	
+
 	// create regular tracer for the scheduler
-	if err := initTracer(); err != nil {
+	ctx, err := initTracer()
+	if err != nil {
 		log.Panic(err)
 	}
-	tracer := tp.Tracer("schedulerStarupTracer")
-	ctx := context.Background()
+	tracer := tp.Tracer("example/otel-go-batch")
 	// defer func() { _ = tp.Shutdown(ctx) }()
 
 	// make a little tree of spans
@@ -52,71 +51,68 @@ func main() {
 	// the root span was sent so the job is started and a sampling decision can be made.
 	// typically the last span comes out when the app ends, but in our case, we don't want that
 	// Going forward, we want to treat the spans like metrics, so we'll create a new tracer for that.
-
-	tracer = tp.Tracer("SchedulerRunnerTracer")
-	ctx = context.Background() // reset context to get rid of the startup identifiers
-
-	
-
-	ctxWorker := context.Background()
-
-	tpWorker, err := newWorkerTracer()
+	ctxWorker, err := newWorkerTracer()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
 
-		
 	var spanWorker trace.Span
-	ctxWorker, spanWorker = tpWorker.Tracer("startNextJob").Start(ctxWorker, "make outer request")
+	failures := 0
+	successes := 0
+	lastNewTrace := time.Now()
+	ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(ctxWorker, "First unit of jobs started")
 	defer spanWorker.End()
 	// This for loop is our fake job queue.
-	for i := 0; i < 1000; i++ {
+	var i = 1
+	for ; i <= 1000; i++ {
+		// fmt.Printf("There last timestamp is %d and the current time is %d and restart variable is %b", lastNewTrace, time.Now(), lastNewTrace.Add(30*time.Second).Before(time.Now()))
 		// check for a number of iterations, make a new context and spanworker.
-		if i%100 == 1 {
-			ctxWorker, spanWorker = tpWorker.Tracer("startNextJob").Start(ctxWorker, "make outer request")
+		if i%100 == 0 || lastNewTrace.Add(30*time.Second).Before(time.Now()) {
+			fmt.Printf("new trace at jobnumber %d and time %s", i, lastNewTrace.String())
+
+			spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
+			spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
+			failures = 0
+			spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
+			successes = 0
+			lastNewTrace = time.Now()
+
+			spanWorker.End()
+			// need to make a new variable?
+			// reassign the context to a new fresh one and make a new spanWorker.
+			ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started")
+
+			spanWorker.SetAttributes(attribute.Int("job.starting_number", i))
 		}
-	
-		doSomeJobWork(ctxWorker, i)
+
+		err := doSomeJobWork(ctxWorker, int64(i))
+		if err != nil {
+			failures += 1
+		}
+		successes += 1
 	}
+	spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
+	spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
+	spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
+	spanWorker.End()
+	// now that all the manual shutdown and restart stuff is done, let's let this tracer die pleasantly
+	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
 
-	// make an initial http request
-	r, err := http.NewRequest("", "", nil)
-	if err != nil {
-		panic(err)
-	}
-
-	// This is roughly what an instrumented http client does.
-	log.Println("The \"make outer request\" span should be recorded, because it is recorded with a Tracer from the SDK TracerProvider")
-	// var span trace.Span
-	ctx, span = tpWorker.Tracer("example/passthrough/outer").Start(ctx, "make outer request")
-	defer span.End()
-	r = r.WithContext(ctx)
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(r.Header))
-
-	backendFunc := func(r *http.Request) {
-		// This is roughly what an instrumented http server does.
-		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		log.Println("The \"handle inner request\" span should be recorded, because it is recorded with a Tracer from the SDK TracerProvider")
-		_, span := tp.Tracer("example/passthrough/inner").Start(ctx, "handle inner request")
-		defer span.End()
-
-		// Do "backend work"
-		time.Sleep(time.Second)
-	}
-	// This handler will be a passthrough, since we didn't set a global TracerProvider
-	passthroughHandler := handler.New(backendFunc)
-	passthroughHandler.HandleHTTPReq(r)
+	// do some job cleanup stuff?
+	log.Println("Done with the batch jobs")
 }
 
 // This section is for the scheduler's tracer.
 var tp *sdktrace.TracerProvider
 
 // initTracer creates and registers trace provider instance.
-func initTracer() error {
-	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+func initTracer() (context.Context, error) {
+	ctx := context.Background()
+	client := otlptracegrpc.NewClient()
+	exp, err := otlptrace.New(ctx, client)
 	if err != nil {
-		return fmt.Errorf("failed to initialize stdouttrace exporter: %w", err)
+		return nil, fmt.Errorf("failed to initialize grpc exporter: %w", err)
 	}
 	bsp := sdktrace.NewBatchSpanProcessor(exp)
 	tp = sdktrace.NewTracerProvider(
@@ -124,20 +120,24 @@ func initTracer() error {
 		sdktrace.WithSpanProcessor(bsp),
 	)
 	otel.SetTracerProvider(tp)
-	return nil
+	return ctx, nil
 }
 
+var tpWorker *sdktrace.TracerProvider
+
 // the next function is to create a new trace proider for the worker.
-func newWorkerTracer() (*sdktrace.TracerProvider, error) {
+func newWorkerTracer() (context.Context, error) {
 	// replace with honeycomb exporter?
-	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	ctx := context.Background()
+	client := otlptracegrpc.NewClient()
+	exp, err := otlptrace.New(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize stdouttrace exporter: %w", err)
+		return nil, fmt.Errorf("failed to initialize grpc exporter: %w", err)
 	}
 	bsp := sdktrace.NewBatchSpanProcessor(exp)
-	tp := sdktrace.NewTracerProvider(
+	tpWorker = sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 		sdktrace.WithSpanProcessor(bsp),
 	)
-	return tp, nil
+	return ctx, nil
 }
