@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -71,27 +72,35 @@ func main() {
 	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
 
 	var spanWorker trace.Span
-	lastNewTrace := time.Now()
 	ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(ctxWorker, "First unit of jobs started", trace.WithLinks(startupTraceSpanLink))
 	fmt.Printf("first worker-associated span: %#v \n", spanWorker)
 	defer spanWorker.End()
+
+	var wg = &sync.WaitGroup{}
 	// This for loop is our fake job queue.
 	var i = 1
 	for ; i <= 10; i++ {
-		fmt.Printf("new trace at jobnumber %d and time %s", i, lastNewTrace.String())
-		ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
-
-		spanWorker.SetAttributes(attribute.Int("job.number", i))
-		spanWorker.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
-		err := doSomeLengthyJobWork(ctxWorker, int64(i))
-		if err != nil {
-			spanWorker.SetStatus(codes.Error, fmt.Sprintf("An error during lengthy job %v", i))
-		}
-		spanWorker.End()
+		wg.Add(1)
+		// the following block runs in parallel
+		go func(i int) {
+			ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
+			defer spanWorker.End()
+			spanWorker.SetAttributes(attribute.Int("job.number", i))
+			spanWorker.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
+			err := doSomeLengthyJobWork(ctxWorker, int64(i))
+			if err != nil {
+				spanWorker.SetStatus(codes.Error, fmt.Sprintf("An error during lengthy job %v", i))
+			}
+			spanWorker.End()
+			// adding a big delay here to let the span get sent before ripping everything down
+			// time.Sleep(2 * time.Second)
+			wg.Done()
+		}(i)
 	}
+	wg.Wait()
+
 	// now that all the manual shutdown and restart stuff is done, let's let this tracer die pleasantly
 	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
-	spanWorker.SetAttributes(attribute.Bool("job.is_last", true))
 	// do some job cleanup stuff?
 	log.Println("Done with the batch jobs")
 }
