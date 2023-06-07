@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -70,51 +71,26 @@ func main() {
 	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
 
 	var spanWorker trace.Span
-	failures := 0
-	successes := 0
 	lastNewTrace := time.Now()
 	ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(ctxWorker, "First unit of jobs started", trace.WithLinks(startupTraceSpanLink))
 	fmt.Printf("first worker-associated span: %#v \n", spanWorker)
 	defer spanWorker.End()
 	// This for loop is our fake job queue.
 	var i = 1
-	var perTraceCountdown = 10
-	for ; i <= 100; i++ {
-		// fmt.Printf("There last timestamp is %d and the current time is %d and restart variable is %b", lastNewTrace, time.Now(), lastNewTrace.Add(30*time.Second).Before(time.Now()))
-		// check for a number of iterations, make a new context and spanworker.
-		if perTraceCountdown < 1 || lastNewTrace.Add(60*time.Second).Before(time.Now()) {
-			fmt.Printf("new trace at jobnumber %d and time %s", i, lastNewTrace.String())
+	for ; i <= 10; i++ {
+		fmt.Printf("new trace at jobnumber %d and time %s", i, lastNewTrace.String())
+		ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
 
-			spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
-			spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
-			failures = 0
-			spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
-			successes = 0
-			lastNewTrace = time.Now()
-			perTraceCountdown = 10
-			spanWorker.End()
-			// need to make a new variable?
-			// reassign the context to a new fresh one and make a new spanWorker.
-			ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
-
-			spanWorker.SetAttributes(attribute.Int("job.starting_number", i))
-			defer spanWorker.End()
-		}
-
-		err := doSomeJobWork(ctxWorker, int64(i))
+		spanWorker.SetAttributes(attribute.Int("job.number", i))
+		err := doSomeLengthyJobWork(ctxWorker, int64(i))
 		if err != nil {
-			failures += 1
+			spanWorker.SetStatus(codes.Error, fmt.Sprintf("An error during lengthy job %v", i))
 		}
-		successes += 1
-		perTraceCountdown -= 1
+		spanWorker.End()
 	}
-	spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
-	spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
-	spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
-	spanWorker.End()
 	// now that all the manual shutdown and restart stuff is done, let's let this tracer die pleasantly
 	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
-
+	spanWorker.SetAttributes(attribute.Bool("job.is_last", true))
 	// do some job cleanup stuff?
 	log.Println("Done with the batch jobs")
 }

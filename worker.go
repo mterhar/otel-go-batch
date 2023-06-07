@@ -69,6 +69,35 @@ func doSomeJobWork(ctx context.Context, jobNumber int64) error {
 	return nil
 }
 
+func doSomeLengthyJobWork(ctx context.Context, jobNumber int64) error {
+	if jobNumber%17 == 0 {
+		return errors.New("couldn't start")
+	}
+	log.Printf("starting job %d \n", jobNumber)
+
+	var tracerWorker = tpWorker.Tracer("example/otel-go-batch")
+	var spanWorker trace.Span
+	ctx, spanWorker = tracerWorker.Start(ctx, "Worker side: Start lengthy job")
+	defer spanWorker.End()
+
+	// randomly return error statuses
+	if seededRand.Intn(100) < 12 {
+		spanWorker.SetStatus(codes.Error, "error in the middle of the job")
+		return errors.New("died in the middle")
+	}
+
+	loops := seededRand.Intn(24) + 2
+	for i := 0; i < loops; i += 1 {
+		_, span := tracerWorker.Start(ctx, "Doing some stuff")
+		defer span.End()
+		span.SetAttributes(attribute.String("worker.loop", fmt.Sprintf("Loop %v of %v", i, loops)))
+
+		time.Sleep(time.Duration(seededRand.Intn(300)+30) * time.Millisecond)
+	}
+
+	return nil
+}
+
 // formatRequest generates string representation of a request
 // from https://medium.com/doing-things-right/pretty-printing-http-requests-in-golang-a918d5aaa000
 func formatRequest(r *http.Request) string {
