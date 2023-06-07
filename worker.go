@@ -28,12 +28,14 @@ func doSomeJobWork(ctx context.Context, jobNumber int64) error {
 	defer spanWorker.End()
 
 	spanWorker.SetAttributes(attribute.Int64("job.number", jobNumber))
+	spanWorker.SetAttributes(attribute.String("job.emitted_by", "worker"))
 	// If we need to make outbound requests from the job, we need to attach the right context for propagation
 
 	var span trace.Span
 
 	ctx, span = tracerWorker.Start(ctx, "Do http request thing")
 	defer span.End()
+	span.SetAttributes(attribute.String("job.emitted_by", "worker"))
 
 	httpTarget := "http://localhost"
 	span.SetAttributes(attribute.String("job.web_target", httpTarget))
@@ -80,6 +82,8 @@ func doSomeLengthyJobWork(ctx context.Context, jobNumber int64) error {
 	ctx, spanWorker = tracerWorker.Start(ctx, "Worker side: Start lengthy job")
 	defer spanWorker.End()
 
+	spanWorker.SetAttributes(attribute.String("job.emitted_by", "worker"))
+
 	// randomly return error statuses
 	if seededRand.Intn(100) < 12 {
 		spanWorker.SetStatus(codes.Error, "error in the middle of the job")
@@ -90,9 +94,21 @@ func doSomeLengthyJobWork(ctx context.Context, jobNumber int64) error {
 	for i := 0; i < loops; i += 1 {
 		_, span := tracerWorker.Start(ctx, "Doing some stuff")
 		defer span.End()
-		span.SetAttributes(attribute.String("worker.loop", fmt.Sprintf("Loop %v of %v", i, loops)))
+
+		span.SetAttributes(attribute.String("job.emitted_by", "worker"))
+		span.SetAttributes(attribute.String("worker.loop", fmt.Sprintf("Loop %v of %v", i+1, loops)))
+		// This line is included in here because there can be issues.
+		// 1. If span is reassigned on the next loop, it won't send the replaced span
+		// 2. If the function closes while the goroutine is sleeping, it won't send the last span
+		// Doing something like this helps ensure that you're emitting everything you expect
 
 		time.Sleep(time.Duration(seededRand.Intn(300)+30) * time.Millisecond)
+
+		// let these spans finish at some random period.
+		go func(s trace.Span) {
+			time.Sleep(time.Duration(seededRand.Intn(50)) * time.Millisecond)
+			s.End()
+		}(span)
 	}
 
 	return nil

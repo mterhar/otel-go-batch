@@ -82,6 +82,7 @@ func main() {
 		ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
 
 		spanWorker.SetAttributes(attribute.Int("job.number", i))
+		spanWorker.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
 		err := doSomeLengthyJobWork(ctxWorker, int64(i))
 		if err != nil {
 			spanWorker.SetStatus(codes.Error, fmt.Sprintf("An error during lengthy job %v", i))
