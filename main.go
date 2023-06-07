@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -15,9 +16,9 @@ import (
 )
 
 func main() {
-
+	jobIdentifier := String(12)
 	// intialization code that starts up, does evaluations, connects to queue
-	log.Println("starting scheduler")
+	log.Println("starting scheduler: " + jobIdentifier)
 
 	// create regular tracer for the scheduler
 	ctx, err := initTracer()
@@ -30,9 +31,11 @@ func main() {
 	// make a little tree of spans
 	var span trace.Span
 	ctx, span = tracer.Start(ctx, "Evaluate the queue and environment")
+	// Since we are going to manually kill this span, I don't know if we want to do the normal defer
+	// If the app is killed, it won't send.
 	// defer span.End()
 
-	span.SetAttributes(attribute.Int("job.run", 2001))
+	span.SetAttributes(attribute.String("job.run", jobIdentifier))
 
 	var childSpan trace.Span
 	ctx, childSpan = tracer.Start(ctx, "Child span for evaluating the queue")
@@ -44,6 +47,15 @@ func main() {
 
 	grandChildSpan.End()
 	childSpan.End()
+	// startupTraceSpanLink := trace.LinkFromContext(ctx, ))
+	startupTraceSpanLink := trace.Link{
+		SpanContext: span.SpanContext(),
+		Attributes: []attribute.KeyValue{
+			attribute.String("name", "Link to job start"),
+			attribute.String("job.run", jobIdentifier),
+		},
+	}
+	fmt.Printf("Startup trace span link: %#v \n", startupTraceSpanLink)
 	span.End()
 
 	_ = tp.Shutdown(ctx)
@@ -51,7 +63,7 @@ func main() {
 	// the root span was sent so the job is started and a sampling decision can be made.
 	// typically the last span comes out when the app ends, but in our case, we don't want that
 	// Going forward, we want to treat the spans like metrics, so we'll create a new tracer for that.
-	ctxWorker, err := newWorkerTracer()
+	ctxWorker, err := initWorkerTracer()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -61,14 +73,16 @@ func main() {
 	failures := 0
 	successes := 0
 	lastNewTrace := time.Now()
-	ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(ctxWorker, "First unit of jobs started")
+	ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(ctxWorker, "First unit of jobs started", trace.WithLinks(startupTraceSpanLink))
+	fmt.Printf("first worker-associated span: %#v \n", spanWorker)
 	defer spanWorker.End()
 	// This for loop is our fake job queue.
 	var i = 1
-	for ; i <= 1000; i++ {
+	var perTraceCountdown = 10
+	for ; i <= 100; i++ {
 		// fmt.Printf("There last timestamp is %d and the current time is %d and restart variable is %b", lastNewTrace, time.Now(), lastNewTrace.Add(30*time.Second).Before(time.Now()))
 		// check for a number of iterations, make a new context and spanworker.
-		if i%100 == 0 || lastNewTrace.Add(30*time.Second).Before(time.Now()) {
+		if perTraceCountdown < 1 || lastNewTrace.Add(60*time.Second).Before(time.Now()) {
 			fmt.Printf("new trace at jobnumber %d and time %s", i, lastNewTrace.String())
 
 			spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
@@ -77,13 +91,14 @@ func main() {
 			spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
 			successes = 0
 			lastNewTrace = time.Now()
-
+			perTraceCountdown = 10
 			spanWorker.End()
 			// need to make a new variable?
 			// reassign the context to a new fresh one and make a new spanWorker.
-			ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started")
+			ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
 
 			spanWorker.SetAttributes(attribute.Int("job.starting_number", i))
+			defer spanWorker.End()
 		}
 
 		err := doSomeJobWork(ctxWorker, int64(i))
@@ -91,6 +106,7 @@ func main() {
 			failures += 1
 		}
 		successes += 1
+		perTraceCountdown -= 1
 	}
 	spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
 	spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
@@ -126,7 +142,9 @@ func initTracer() (context.Context, error) {
 var tpWorker *sdktrace.TracerProvider
 
 // the next function is to create a new trace proider for the worker.
-func newWorkerTracer() (context.Context, error) {
+// allows different sampler, different batching, etc.
+// we start it in the scheduler to pass context to the worker rather than the worker starting its own traces
+func initWorkerTracer() (context.Context, error) {
 	// replace with honeycomb exporter?
 	ctx := context.Background()
 	client := otlptracegrpc.NewClient()
@@ -140,4 +158,26 @@ func newWorkerTracer() (context.Context, error) {
 		sdktrace.WithSpanProcessor(bsp),
 	)
 	return ctx, nil
+}
+
+// helper functions unrelated to otel
+
+// Make a random string for job identifier
+// from https://www.calhoun.io/creating-random-strings-in-go/
+const charset = "abcdefghijklmnopqrstuvwxyz" +
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+var seededRand *rand.Rand = rand.New(
+	rand.NewSource(time.Now().UnixNano()))
+
+func StringWithCharset(length int, charset string) string {
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[seededRand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
+func String(length int) string {
+	return StringWithCharset(length, charset)
 }
