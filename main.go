@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -26,24 +27,27 @@ func main() {
 		log.Panic(err)
 	}
 	tracer := tp.Tracer("example/otel-go-batch")
-	// defer func() { _ = tp.Shutdown(ctx) }()
+	defer func() { _ = tp.Shutdown(ctx) }()
 
 	// make a little tree of spans
 	var span trace.Span
 	ctx, span = tracer.Start(ctx, "Evaluate the queue and environment")
 	// Since we are going to manually kill this span, I don't know if we want to do the normal defer
 	// If the app is killed, it won't send.
-	// defer span.End()
+	defer span.End()
 
 	span.SetAttributes(attribute.String("job.run", jobIdentifier))
+	span.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
 
 	var childSpan trace.Span
-	ctx, childSpan = tracer.Start(ctx, "Child span for evaluating the queue")
+	ctx2, childSpan := tracer.Start(ctx, "Child span for evaluating the queue")
 	childSpan.SetAttributes(attribute.Int("queue.depth", 1000))
+	childSpan.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
 
 	var grandChildSpan trace.Span
-	ctx, grandChildSpan = tracer.Start(ctx, "Grandchild span reporting no errors")
+	_, grandChildSpan = tracer.Start(ctx2, "Grandchild span reporting no errors")
 	grandChildSpan.SetAttributes(attribute.Bool("errors", false))
+	grandChildSpan.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
 
 	grandChildSpan.End()
 	childSpan.End()
@@ -53,67 +57,25 @@ func main() {
 		Attributes: []attribute.KeyValue{
 			attribute.String("name", "Link to job start"),
 			attribute.String("job.run", jobIdentifier),
+			attribute.String("job.emitted_by", "scheduler"),
 		},
 	}
 	fmt.Printf("Startup trace span link: %#v \n", startupTraceSpanLink)
-	span.End()
-
-	_ = tp.Shutdown(ctx)
-	// we now have no active spans on that first trace.
-	// the root span was sent so the job is started and a sampling decision can be made.
-	// typically the last span comes out when the app ends, but in our case, we don't want that
-	// Going forward, we want to treat the spans like metrics, so we'll create a new tracer for that.
-	ctxWorker, err := initWorkerTracer()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
 
 	var spanWorker trace.Span
-	failures := 0
-	successes := 0
-	lastNewTrace := time.Now()
-	ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(ctxWorker, "First unit of jobs started", trace.WithLinks(startupTraceSpanLink))
-	fmt.Printf("first worker-associated span: %#v \n", spanWorker)
-	defer spanWorker.End()
 	// This for loop is our fake job queue.
 	var i = 1
-	var perTraceCountdown = 10
 	for ; i <= 100; i++ {
-		// fmt.Printf("There last timestamp is %d and the current time is %d and restart variable is %b", lastNewTrace, time.Now(), lastNewTrace.Add(30*time.Second).Before(time.Now()))
-		// check for a number of iterations, make a new context and spanworker.
-		if perTraceCountdown < 1 || lastNewTrace.Add(60*time.Second).Before(time.Now()) {
-			fmt.Printf("new trace at jobnumber %d and time %s", i, lastNewTrace.String())
+		ctx, spanWorker = tp.Tracer("example/otel-go-batch").Start(ctx, "Job started") //, trace.WithLinks(startupTraceSpanLink))
+		defer spanWorker.End()
+		spanWorker.SetAttributes(attribute.Int("job.number", i))
+		spanWorker.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
 
-			spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
-			spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
-			failures = 0
-			spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
-			successes = 0
-			lastNewTrace = time.Now()
-			perTraceCountdown = 10
-			spanWorker.End()
-			// need to make a new variable?
-			// reassign the context to a new fresh one and make a new spanWorker.
-			ctxWorker, spanWorker = tpWorker.Tracer("example/otel-go-batch").Start(context.Background(), "Next unit of jobs started", trace.WithLinks(startupTraceSpanLink))
-
-			spanWorker.SetAttributes(attribute.Int("job.starting_number", i))
-			defer spanWorker.End()
-		}
-
-		err := doSomeJobWork(ctxWorker, int64(i))
+		err := doSomeJobWork(ctx, int64(i))
 		if err != nil {
-			failures += 1
+			spanWorker.SetStatus(codes.Error, "Job failed for some reason")
 		}
-		successes += 1
-		perTraceCountdown -= 1
 	}
-	spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
-	spanWorker.SetAttributes(attribute.Int("job.period.failures", failures))
-	spanWorker.SetAttributes(attribute.Int("job.period.successes", successes))
-	spanWorker.End()
-	// now that all the manual shutdown and restart stuff is done, let's let this tracer die pleasantly
-	defer func() { _ = tpWorker.Shutdown(ctxWorker) }()
 
 	// do some job cleanup stuff?
 	log.Println("Done with the batch jobs")
@@ -136,27 +98,6 @@ func initTracer() (context.Context, error) {
 		sdktrace.WithSpanProcessor(bsp),
 	)
 	otel.SetTracerProvider(tp)
-	return ctx, nil
-}
-
-var tpWorker *sdktrace.TracerProvider
-
-// the next function is to create a new trace proider for the worker.
-// allows different sampler, different batching, etc.
-// we start it in the scheduler to pass context to the worker rather than the worker starting its own traces
-func initWorkerTracer() (context.Context, error) {
-	// replace with honeycomb exporter?
-	ctx := context.Background()
-	client := otlptracegrpc.NewClient()
-	exp, err := otlptrace.New(ctx, client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize grpc exporter: %w", err)
-	}
-	bsp := sdktrace.NewBatchSpanProcessor(exp)
-	tpWorker = sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		sdktrace.WithSpanProcessor(bsp),
-	)
 	return ctx, nil
 }
 

@@ -22,18 +22,20 @@ func doSomeJobWork(ctx context.Context, jobNumber int64) error {
 	}
 	log.Printf("starting job %d \n", jobNumber)
 
-	var tracerWorker = tpWorker.Tracer("example/otel-go-batch")
+	var tracerWorker = tp.Tracer("example/otel-go-batch")
 	var spanWorker trace.Span
 	ctx, spanWorker = tracerWorker.Start(ctx, "Worker side: Start job")
 	defer spanWorker.End()
 
 	spanWorker.SetAttributes(attribute.Int64("job.number", jobNumber))
+	spanWorker.SetAttributes(attribute.String("job.emitted_by", "worker"))
 	// If we need to make outbound requests from the job, we need to attach the right context for propagation
 
 	var span trace.Span
 
 	ctx, span = tracerWorker.Start(ctx, "Do http request thing")
 	defer span.End()
+	spanWorker.SetAttributes(attribute.String("job.emitted_by", "worker"))
 
 	httpTarget := "http://localhost"
 	span.SetAttributes(attribute.String("job.web_target", httpTarget))
