@@ -104,8 +104,9 @@ func main() {
 		err := doSomeJobWork(ctxWorker, int64(i))
 		if err != nil {
 			failures += 1
+		} else {
+			successes += 1
 		}
-		successes += 1
 		perTraceCountdown -= 1
 	}
 	spanWorker.SetAttributes(attribute.Int("job.period.ending_number", i-1))
