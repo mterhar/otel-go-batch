@@ -19,7 +19,7 @@ func main() {
 	log.Println("starting scheduler: " + jobIdentifier)
 
 	optionalTrace()
-	
+
 	// do some job cleanup stuff?
 	log.Println("Done with the batch jobs")
 }

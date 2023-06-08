@@ -114,6 +114,37 @@ func doSomeLengthyJobWork(ctx context.Context, jobNumber int64) error {
 	return nil
 }
 
+// nowhere in here are we emitting spans.
+// the return string array is collecting a list of errors.
+func doSomeDetailedJobWork(jobNumber int64) []string {
+	// the majority have no errors
+	if seededRand.Intn(100) < 50 {
+		return nil
+	}
+
+	if jobNumber%17 == 0 {
+		return []string{"couldn't start"}
+	}
+	log.Printf("starting job %d \n", jobNumber)
+
+	var errorRecord []string
+
+	// randomly return error statuses
+	if seededRand.Intn(100) < 12 {
+		errorRecord = append(errorRecord, "problems at the beginning")
+	}
+
+	// loop through abunch of tasks
+	loops := seededRand.Intn(1000) + 2
+	for i := 0; i < loops; i += 1 {
+		if seededRand.Intn(100) < 12 {
+			errorRecord = append(errorRecord, fmt.Sprintf("error in job %v on task %v", jobNumber, i))
+		}
+	}
+
+	return errorRecord
+}
+
 // formatRequest generates string representation of a request
 // from https://medium.com/doing-things-right/pretty-printing-http-requests-in-golang-a918d5aaa000
 func formatRequest(r *http.Request) string {
