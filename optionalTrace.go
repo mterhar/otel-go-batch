@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"time"
@@ -23,6 +22,7 @@ func optionalTrace() {
 	// make a little tree of spans
 	var span trace.Span
 	ctx, span = tracer.Start(ctx, "Evaluate the queue and environment")
+	defer span.End()
 
 	startupTraceSpanLink := trace.Link{
 		SpanContext: span.SpanContext(),
@@ -30,42 +30,36 @@ func optionalTrace() {
 			attribute.String("name", "Link to job start"),
 		},
 	}
-	span.End()
 
-	jobs := make([]int, 10)
-	var errStringArray []string
+	jobs := make([]int, 1000)
+
 	errorsFound := 0
+	errorTypesStr := []string{"SchedulingFailure", "RecoverableStartupFailure", "ConnectionFailure", "TooManyPuppies"}
 
 	for i := range jobs {
 		// do the jobs and collect up the errors
-		errStrings := doSomeDetailedJobWork(int64(i))
-		if errStrings != nil {
-			errStringArray = append(errStringArray, errStrings...)
+		errIntArray := doSomeDetailedJobWork2(int64(i))
+		if errIntArray != nil {
+			var tracerWorker = tp.Tracer("example/otel-go-batch")
+			_, spanWorker := tracerWorker.Start(ctx, "Errors Summary Span", trace.WithLinks(startupTraceSpanLink))
+			defer spanWorker.End()
+			spanWorker.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
+			spanWorker.SetAttributes(attribute.Int64("job.number", int64(i)))
+			spanWorker.SetStatus(codes.Error, "Error summary span")
+			// make a span for each error
+			for errorKind, errorCount := range errIntArray {
+				errorAttrName := fmt.Sprintf("error.%s", errorTypesStr[errorKind])
+				spanWorker.SetAttributes(attribute.Int64(errorAttrName, int64(errorCount)))
+			}
+
+			spanWorker.End()
 		}
 	}
 
 	// do all the error reporting at the end.
-	if len(errStringArray) > 0 {
-		errorsFound += len(errStringArray)
-		var tracerWorker = tp.Tracer("example/otel-go-batch")
-		ctxWorker, spanWorker := tracerWorker.Start(context.Background(), "Something went wrong", trace.WithLinks(startupTraceSpanLink))
-		defer spanWorker.End()
-		spanWorker.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
 
-		// make a span for each error
-		for _, errStr := range errStringArray {
-			_, span := tracerWorker.Start(ctxWorker, "error in job")
-			span.SetAttributes(attribute.String("job.emitted_by", "scheduler"))
-			// if you want to capture the errors without setting the status, use the commented line
-			// span.SetAttributes(attributes.String("error.message", errStr)
-			span.SetStatus(codes.Error, errStr)
-			span.End()
-			time.Sleep(time.Millisecond)
-		}
-
-		spanWorker.End()
-	}
 	fmt.Printf("jobs run %d, errors found %d \n", len(jobs), errorsFound)
+	span.End()
 	defer func() { _ = tp.Shutdown(ctx) }()
 	time.Sleep(2 * time.Second)
 }

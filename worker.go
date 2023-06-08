@@ -145,6 +145,46 @@ func doSomeDetailedJobWork(jobNumber int64) []string {
 	return errorRecord
 }
 
+// nowhere in here are we emitting spans.
+// the return int array is collecting error counts by type.
+func doSomeDetailedJobWork2(jobNumber int64) []int {
+	// the majority have no errors
+	if seededRand.Intn(100) < 80 {
+		return nil
+	}
+
+	// startup panic is position 0
+	if jobNumber%17 == 0 {
+		return []int{1, 0, 0, 0}
+	}
+	log.Printf("starting job %d \n", jobNumber)
+
+	errorRecord := []int{0, 0, 0, 0}
+
+	// recoverable error is position 1
+	if seededRand.Intn(100) < 12 {
+		errorRecord[1] = 1
+	}
+
+	// loop through a bunch of tasks making 2 and 3 type errors
+	loops := seededRand.Intn(20) + 2
+	for i := 0; i < loops; i += 1 {
+		rando := seededRand.Intn(100)
+		if rando < 8 {
+			errorRecord[2] += 1
+		} else if rando < 13 {
+			errorRecord[3] += 1
+		}
+	}
+
+	for _, v := range errorRecord {
+		if v > 0 {
+			return errorRecord
+		}
+	}
+	return nil
+}
+
 // formatRequest generates string representation of a request
 // from https://medium.com/doing-things-right/pretty-printing-http-requests-in-golang-a918d5aaa000
 func formatRequest(r *http.Request) string {
