@@ -12,5 +12,14 @@ OTEL_EXPORTER_OTLP_ENDPOINT="https://api.honeycomb.io:443"
 OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=[your environment api key]"
 ```
 
+In the root directory, run: 
+
+```shell
+go run .
+```
+
+Depending on the branch, it may show different console output. 
+If it completes successfully, `Done with the batch jobs` is displayed. 
+
 <!-- OSS metadata badge - rename repo link and set status in OSSMETADATA -->
 <!-- [![OSS Lifecycle](https://img.shields.io/osslifecycle/honeycombio/otel-go-batch)](https://github.com/honeycombio/home/blob/main/honeycomb-oss-lifecycle-and-practices.md) -->
