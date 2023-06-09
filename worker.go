@@ -118,11 +118,13 @@ func doSomeLengthyJobWork(ctx context.Context, jobNumber int64) error {
 // the return string array is collecting a list of errors.
 func doSomeDetailedJobWork(jobNumber int64) []string {
 	// the majority have no errors
-	if seededRand.Intn(100) < 80 {
+	if seededRand.Intn(100) < 90 {
+		time.Sleep(2393 * time.Microsecond)
 		return nil
 	}
 
 	if jobNumber%17 == 0 {
+		time.Sleep(240 * time.Microsecond)
 		return []string{"couldn't start"}
 	}
 	log.Printf("starting job %d \n", jobNumber)
@@ -130,20 +132,20 @@ func doSomeDetailedJobWork(jobNumber int64) []string {
 	var errorRecord []string
 
 	// randomly return error statuses
-	if seededRand.Intn(100) < 12 {
+	if seededRand.Intn(100) < 30 {
 		errorRecord = append(errorRecord, "problems at the beginning")
 	}
 
 	// loop through abunch of tasks
 	loops := seededRand.Intn(20) + 2
 	for i := 0; i < loops; i += 1 {
-		if seededRand.Intn(100) < 12 {
+		if seededRand.Intn(100) < 40 {
 			errorRecord = append(errorRecord, fmt.Sprintf("error in job %v on task %v", jobNumber, i))
 		}
 	}
-	time.Sleep(time.Duration(seededRand.Intn(20)+20) * time.Millisecond)
+	time.Sleep(time.Duration(seededRand.Intn(500)+80) * time.Millisecond)
 
-	if len(errorRecord) < 1 {
+	if len(errorRecord) > 0 {
 		return errorRecord
 	}
 	return nil
