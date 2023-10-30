@@ -79,7 +79,7 @@ func main() {
 	var wg = &sync.WaitGroup{}
 	// This for loop is our fake job queue.
 	var i = 1
-	for ; i <= 10; i++ {
+	for ; i <= 1000; i++ {
 		wg.Add(1)
 		// the following block runs in parallel
 		go func(i int) {
@@ -93,7 +93,7 @@ func main() {
 			}
 			spanWorker.End()
 			// adding a big delay here to let the span get sent before ripping everything down
-			// time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			wg.Done()
 		}(i)
 	}

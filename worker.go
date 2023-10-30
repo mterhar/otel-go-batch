@@ -50,7 +50,7 @@ func doSomeJobWork(ctx context.Context, jobNumber int64) error {
 		span.SetStatus(codes.Error, "error in the middle of the job")
 		return errors.New("died in the middle")
 	}
-	time.Sleep((29 * time.Millisecond))
+	// time.Sleep((29 * time.Millisecond))
 
 	// this is how to explicitly send the trace propagation headers.
 	// it's probably not needed here since the only context passed in was for the job
@@ -65,8 +65,8 @@ func doSomeJobWork(ctx context.Context, jobNumber int64) error {
 	}
 
 	spanWorker.AddEvent("WebRequest", trace.WithAttributes(attribute.String("request.as_string", httpStr)))
-	sleepTime := jobNumber % 10 * 80
-	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+	// sleepTime := 0 /jobNumber % 10 * 80
+	// time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 
 	return nil
 }
@@ -102,7 +102,7 @@ func doSomeLengthyJobWork(ctx context.Context, jobNumber int64) error {
 		// 2. If the function closes while the goroutine is sleeping, it won't send the last span
 		// Doing something like this helps ensure that you're emitting everything you expect
 
-		time.Sleep(time.Duration(seededRand.Intn(300)+30) * time.Millisecond)
+		time.Sleep(time.Duration(seededRand.Intn(7)+5) * time.Millisecond)
 
 		// let these spans finish at some random period.
 		go func(s trace.Span) {
